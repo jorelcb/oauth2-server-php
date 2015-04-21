@@ -173,7 +173,6 @@ class Bootstrap
         if (!$this->couchbase) {
             $skipCouchbase = $this->getEnvVar('SKIP_COUCHBASE_TESTS');
             if (!$skipCouchbase && class_exists('Couchbase')) {
-
                 $couchbase = new \Couchbase(array('localhost:8091'), '', '', 'auth', false);
                 if ($this->testCouchbaseConnection($couchbase)) {
                     $this->clearCouchbase($couchbase);
@@ -258,12 +257,13 @@ class Bootstrap
         ));
 
         $sys->create_column_family('oauth2_test', 'auth');
+        $cassandra = new \phpcassa\Connection\ConnectionPool('oauth2_test', array('127.0.0.1:9160'));
+        $cf = new \phpcassa\ColumnFamily($cassandra, 'auth');
 
         // populate the data
         $storage->setClientDetails("oauth_test_client", "testpass", "http://example.com", 'implicit password');
         $storage->setAccessToken("testtoken", "Some Client", '', time() + 1000);
         $storage->setAuthorizationCode("testcode", "Some Client", '', '', time() + 1000);
-        $storage->setUser("testuser", "password");
 
         $storage->setScope('supportedscope1 supportedscope2 supportedscope3 supportedscope4');
         $storage->setScope('defaultscope1 defaultscope2', null, 'default');
@@ -281,6 +281,13 @@ class Bootstrap
         $storage->setScope('clientscope3', 'Test Default Scope Client ID 2', 'default');
 
         $storage->setClientKey('oauth_test_client', $this->getTestPublicKey(), 'test_subject');
+
+        $cf->insert("oauth_public_keys:ClientID_One", array('__data' => json_encode(array("public_key" => "client_1_public", "private_key" => "client_1_private", "encryption_algorithm" => "RS256"))));
+        $cf->insert("oauth_public_keys:ClientID_Two", array('__data' => json_encode(array("public_key" => "client_2_public", "private_key" => "client_2_private", "encryption_algorithm" => "RS256"))));
+        $cf->insert("oauth_public_keys:", array('__data' => json_encode(array("public_key" => $this->getTestPublicKey(), "private_key" =>  $this->getTestPrivateKey(), "encryption_algorithm" => "RS256"))));
+
+        $cf->insert("oauth_users:testuser", array('__data' =>json_encode(array("password" => "password", "email" => "testuser@test.com", "email_verified" => true))));
+
     }
 
     private function createSqliteDb(\PDO $pdo)
@@ -309,6 +316,10 @@ class Bootstrap
 
     private function createPostgresDb()
     {
+        if (!`psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='postgres'"`) {
+            `createuser -s -r postgres`;
+        }
+
         `createdb -O postgres oauth2_server_php`;
     }
 
@@ -319,7 +330,9 @@ class Bootstrap
 
     private function removePostgresDb()
     {
-        `dropdb oauth2_server_php`;
+        if (trim(`psql -l | grep oauth2_server_php | wc -l`)) {
+            `dropdb oauth2_server_php`;
+        }
     }
 
     public function runPdoSql(\PDO $pdo)
